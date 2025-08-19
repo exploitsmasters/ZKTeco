@@ -13,9 +13,20 @@
     "start:server": "node dist/server/index.js"
   },
   "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "@types/sqlite3": "^5.1.0",
+    "@types/ws": "^8.18.1",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "lucide-react": "^0.344.0",
+    "nodemon": "^3.1.10",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sqlite3": "^5.1.7",
+    "ts-node": "^10.9.2",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
