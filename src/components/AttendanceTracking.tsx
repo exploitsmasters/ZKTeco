@@ -1,22 +1,81 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Clock, Calendar, Download, Filter, Search, RefreshCw, Upload, FileText } from 'lucide-react';
-import { mockAttendanceRecords } from '../data/mockData';
 import { AttendanceRecord } from '../types';
 
 const AttendanceTracking: React.FC = () => {
-  const [records] = useState<AttendanceRecord[]>(mockAttendanceRecords);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [filterType, setFilterType] = useState('all');
-  const [showUSBImport, setShowUSBImport] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    checkIns: 0,
+    checkOuts: 0,
+    breaks: 0,
+    successRate: 0
+  });
+
+  useEffect(() => {
+    loadAttendanceRecords();
+    loadStats();
+    setupWebSocket();
+  }, [selectedDate]);
+
+  const loadAttendanceRecords = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/attendance?startDate=${selectedDate}T00:00:00Z&endDate=${selectedDate}T23:59:59Z`);
+      const result = await response.json();
+      if (result.success) {
+        setRecords(result.data);
+      }
+    } catch (error) {
+      console.error('Error loading attendance records:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadStats = async () => {
+    try {
+      const response = await fetch(`/api/attendance/stats?date=${selectedDate}`);
+      const result = await response.json();
+      if (result.success) {
+        const data = result.data;
+        setStats({
+          checkIns: data.checkIns,
+          checkOuts: data.checkOuts,
+          breaks: data.breaks,
+          successRate: Math.round((data.successfulRecords / data.totalRecords) * 100) || 0
+        });
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    }
+  };
+
+  const setupWebSocket = () => {
+    const ws = new WebSocket(`ws://localhost:3001`);
+    
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'attendance') {
+        const newRecord = message.data;
+        // Only add if it's for today
+        if (newRecord.timestamp.split('T')[0] === selectedDate) {
+          setRecords(prev => [newRecord, ...prev]);
+          loadStats(); // Refresh stats
+        }
+      }
+    };
+  };
 
   const filteredRecords = records.filter(record => {
     const matchesSearch = record.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          record.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesDate = record.timestamp.split('T')[0] === selectedDate;
     const matchesType = filterType === 'all' || record.type === filterType;
     
-    return matchesSearch && matchesDate && matchesType;
+    return matchesSearch && matchesType;
   });
 
   const getTypeIcon = (type: string) => {
@@ -39,30 +98,49 @@ const AttendanceTracking: React.FC = () => {
     return styles[method as keyof typeof styles] || 'bg-gray-100 text-gray-800';
   };
 
-  const exportData = () => {
-    const csvContent = [
-      ['Employee ID', 'Name', 'Date', 'Time', 'Type', 'Method', 'Device', 'Location', 'Status'].join(','),
-      ...filteredRecords.map(record => [
-        record.employeeId,
-        record.employeeName,
-        record.timestamp.split('T')[0],
-        new Date(record.timestamp).toLocaleTimeString(),
-        record.type,
-        record.method,
-        record.deviceId,
-        record.location,
-        record.status
-      ].join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `attendance-${selectedDate}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
+  const exportData = async () => {
+    try {
+      const response = await fetch(`/api/attendance/export?format=csv&startDate=${selectedDate}T00:00:00Z&endDate=${selectedDate}T23:59:59Z`);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance-${selectedDate}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error exporting data:', error);
+    }
   };
+
+  const syncAllDevices = async () => {
+    try {
+      const response = await fetch('/api/devices');
+      const devicesResult = await response.json();
+      
+      if (devicesResult.success) {
+        for (const device of devicesResult.data) {
+          if (device.status === 'online') {
+            await fetch(`/api/attendance/sync/${device.id}`, { method: 'GET' });
+          }
+        }
+        loadAttendanceRecords();
+      }
+    } catch (error) {
+      console.error('Error syncing devices:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">Loading attendance records...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
@@ -83,16 +161,12 @@ const AttendanceTracking: React.FC = () => {
             <Download className="w-4 h-4" />
             <span>Export</span>
           </button>
-          <button className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-blue-700 transition-colors">
+          <button 
+            onClick={syncAllDevices}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-blue-700 transition-colors"
+          >
             <RefreshCw className="w-4 h-4" />
             <span>Sync</span>
-          </button>
-          <button 
-            onClick={() => setShowUSBImport(true)}
-            className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-purple-700 transition-colors"
-          >
-            <Upload className="w-4 h-4" />
-            <span>USB Import</span>
           </button>
         </div>
       </div>
@@ -148,9 +222,7 @@ const AttendanceTracking: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Today's Check-ins</p>
-              <p className="text-2xl font-bold text-green-600">
-                {filteredRecords.filter(r => r.type === 'check-in').length}
-              </p>
+              <p className="text-2xl font-bold text-green-600">{stats.checkIns}</p>
             </div>
             <div className="text-2xl">🟢</div>
           </div>
@@ -160,9 +232,7 @@ const AttendanceTracking: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Today's Check-outs</p>
-              <p className="text-2xl font-bold text-red-600">
-                {filteredRecords.filter(r => r.type === 'check-out').length}
-              </p>
+              <p className="text-2xl font-bold text-red-600">{stats.checkOuts}</p>
             </div>
             <div className="text-2xl">🔴</div>
           </div>
@@ -172,9 +242,7 @@ const AttendanceTracking: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Break Times</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {filteredRecords.filter(r => r.type.includes('break')).length}
-              </p>
+              <p className="text-2xl font-bold text-orange-600">{stats.breaks}</p>
             </div>
             <div className="text-2xl">🟡</div>
           </div>
@@ -184,9 +252,7 @@ const AttendanceTracking: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Success Rate</p>
-              <p className="text-2xl font-bold text-blue-600">
-                {Math.round((filteredRecords.filter(r => r.status === 'success').length / filteredRecords.length) * 100)}%
-              </p>
+              <p className="text-2xl font-bold text-blue-600">{stats.successRate}%</p>
             </div>
             <div className="text-2xl">✅</div>
           </div>
@@ -194,166 +260,99 @@ const AttendanceTracking: React.FC = () => {
       </div>
 
       {/* Attendance Records */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Employee
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Time
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Method
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Device/Location
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredRecords.map((record) => (
-                <tr key={record.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                        {record.employeeName.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div className="ml-4">
-                        <div className="text-sm font-medium text-gray-900">{record.employeeName}</div>
-                        <div className="text-sm text-gray-500">{record.employeeId}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">
-                      {new Date(record.timestamp).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      {new Date(record.timestamp).toLocaleDateString()}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-lg">{getTypeIcon(record.type)}</span>
-                      <span className="text-sm font-medium text-gray-900 capitalize">
-                        {record.type.replace('-', ' ')}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getMethodBadge(record.method)}`}>
-                      {record.method}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{record.deviceId}</div>
-                    <div className="text-sm text-gray-500">{record.location}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      record.status === 'success' ? 'bg-green-100 text-green-800' :
-                      record.status === 'duplicate' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {record.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {records.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+          <Clock className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">No Attendance Records</h3>
+          <p className="text-gray-600 mb-6">No attendance records found for {selectedDate}</p>
+          <button 
+            onClick={syncAllDevices}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Sync from Devices
+          </button>
         </div>
-      </div>
-
-      {/* USB Import Modal */}
-      {showUSBImport && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-2xl w-full">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">USB Import - Employee & Attendance Data</h3>
-                <button 
-                  onClick={() => setShowUSBImport(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className="p-6">
-              <div className="space-y-6">
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <h4 className="text-lg font-medium text-gray-900 mb-2">Import from USB Drive</h4>
-                  <p className="text-gray-600 mb-4">
-                    Select .dat, .xls, or .xlsx files exported from ZKTeco devices
-                  </p>
-                  <input
-                    type="file"
-                    accept=".dat,.xls,.xlsx,.csv"
-                    multiple
-                    className="hidden"
-                    id="usb-import"
-                  />
-                  <label
-                    htmlFor="usb-import"
-                    className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 cursor-pointer inline-block"
-                  >
-                    Choose Files
-                  </label>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-blue-50 p-4 rounded-lg">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <FileText className="w-5 h-5 text-blue-600" />
-                      <h5 className="font-medium text-blue-900">Employee Data</h5>
-                    </div>
-                    <p className="text-sm text-blue-700">Import employee records with biometric templates</p>
-                  </div>
-                  <div className="bg-green-50 p-4 rounded-lg">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <Clock className="w-5 h-5 text-green-600" />
-                      <h5 className="font-medium text-green-900">Attendance Logs</h5>
-                    </div>
-                    <p className="text-sm text-green-700">Import attendance records and time logs</p>
-                  </div>
-                </div>
-                
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                  <h5 className="font-medium text-yellow-800 mb-2">Supported Formats:</h5>
-                  <ul className="text-sm text-yellow-700 space-y-1">
-                    <li>• .dat files (ZKTeco native format)</li>
-                    <li>• .xls/.xlsx files (Excel format)</li>
-                    <li>• .csv files (Comma-separated values)</li>
-                  </ul>
-                </div>
-              </div>
-              
-              <div className="mt-6 flex justify-end space-x-3">
-                <button 
-                  onClick={() => setShowUSBImport(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                  Import Data
-                </button>
-              </div>
-            </div>
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Employee
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Time
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Type
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Method
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Device/Location
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {filteredRecords.map((record) => (
+                  <tr key={record.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                          {record.employeeName.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <div className="ml-4">
+                          <div className="text-sm font-medium text-gray-900">{record.employeeName}</div>
+                          <div className="text-sm text-gray-500">{record.employeeId}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        {new Date(record.timestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {new Date(record.timestamp).toLocaleDateString()}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-lg">{getTypeIcon(record.type)}</span>
+                        <span className="text-sm font-medium text-gray-900 capitalize">
+                          {record.type.replace('-', ' ')}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getMethodBadge(record.method)}`}>
+                        {record.method}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{record.deviceId}</div>
+                      <div className="text-sm text-gray-500">{record.location}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        record.status === 'success' ? 'bg-green-100 text-green-800' :
+                        record.status === 'duplicate' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-red-100 text-red-800'
+                      }`}>
+                        {record.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

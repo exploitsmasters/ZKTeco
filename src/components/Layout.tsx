@@ -8,7 +8,8 @@ import {
   Shield,
   Monitor,
   BarChart3,
-  Calendar
+  Calendar,
+  Globe
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -18,6 +19,12 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, currentPage, onPageChange }) => {
+  const [language, setLanguage] = React.useState<'en' | 'ar'>('en');
+
+  const toggleLanguage = () => {
+    setLanguage(prev => prev === 'en' ? 'ar' : 'en');
+  };
+
   const navigation = [
     { id: 'dashboard', name: 'Dashboard', icon: Home },
     { id: 'attendance', name: 'Attendance', icon: Clock },
@@ -79,6 +86,15 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onPageChange }) 
                   <span className="w-3 h-3 bg-green-400 rounded-full"></span>
                   <span className="text-sm text-gray-600">System Online</span>
                 </div>
+                <button
+                  onClick={toggleLanguage}
+                  className="flex items-center space-x-2 px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  <Globe className="w-4 h-4 text-gray-600" />
+                  <span className="text-sm font-medium text-gray-700">
+                    {language === 'en' ? 'EN' : 'AR'}
+                  </span>
+                </button>
                 <div className="text-sm text-gray-500">
                   Last sync: {new Date().toLocaleTimeString()}
                 </div>

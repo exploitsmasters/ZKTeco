@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { FileText, Download, Calendar, Users, Clock, Filter, BarChart3 } from 'lucide-react';
-import { mockEmployees, mockAttendanceRecords, mockShifts } from '../data/mockData';
 import { Employee, AttendanceRecord, Shift, AttendanceReport } from '../types';
 
 const ReportsManagement: React.FC = () => {
-  const [employees] = useState<Employee[]>(mockEmployees);
-  const [attendanceRecords] = useState<AttendanceRecord[]>(mockAttendanceRecords);
-  const [shifts] = useState<Shift[]>(mockShifts);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [shifts, setShifts] = useState<Shift[]>([]);
   const [selectedReport, setSelectedReport] = useState('attendance');
   const [dateRange, setDateRange] = useState({
     startDate: new Date().toISOString().split('T')[0],
@@ -14,6 +13,37 @@ const ReportsManagement: React.FC = () => {
   });
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [selectedShifts, setSelectedShifts] = useState<string[]>([]);
+
+  React.useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      // Load employees
+      const empResponse = await fetch('/api/employees');
+      const empResult = await empResponse.json();
+      if (empResult.success) {
+        setEmployees(empResult.data);
+      }
+
+      // Load attendance records
+      const attResponse = await fetch(`/api/attendance?startDate=${dateRange.startDate}T00:00:00Z&endDate=${dateRange.endDate}T23:59:59Z`);
+      const attResult = await attResponse.json();
+      if (attResult.success) {
+        setAttendanceRecords(attResult.data);
+      }
+
+      // Load shifts
+      const shiftResponse = await fetch('/api/shifts');
+      const shiftResult = await shiftResponse.json();
+      if (shiftResult.success) {
+        setShifts(shiftResult.data);
+      }
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  };
 
   const generateAttendanceReport = (): AttendanceReport[] => {
     const reports: AttendanceReport[] = [];
